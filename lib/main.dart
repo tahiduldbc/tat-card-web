@@ -1,9 +1,10 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:webfeed_revised/webfeed_revised.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'access_gate.dart';
+import 'package:webview_windows/webview_windows.dart' as windows;
 import 'dart:async';
 import 'dart:convert';
 import 'package:intl/intl.dart';
@@ -11,11 +12,10 @@ import 'package:flutter/services.dart';
 import 'package:screenshot/screenshot.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
 import 'app_browser_controller.dart';
 import 'buffer_service.dart';
-import 'platform_file.dart';
 
 // গ্লোবাল ভেরিয়েবল
 Stream<String>? _globalBroadcastStream;
@@ -108,6 +108,9 @@ class _MainHomeScreenState extends State<MainHomeScreen> {
   Future<void> _initBackgroundBrowser() async {
     try {
       await _webviewController.initialize();
+      await _webviewController.setPopupWindowPolicy(
+        windows.WebviewPopupWindowPolicy.deny,
+      );
       _globalBroadcastStream = _webviewController.url.asBroadcastStream();
       if (mounted) setState(() => _isWebviewInitialized = true);
       debugPrint('Webview initialized successfully');
@@ -325,34 +328,6 @@ Future<void> resolveAndNavigate(
   String? articleTitle,
 }) async {
   debugPrint('resolveAndNavigate called with URL: $inputUrl');
-  if (kIsWeb) {
-    // A browser page cannot inspect another site's cross-origin redirect chain.
-    // Open the supplied URL for the user and avoid a misleading endless spinner.
-    final trimmed = inputUrl.trim();
-    final parsed = Uri.tryParse(
-      trimmed.startsWith('http://') || trimmed.startsWith('https://')
-          ? trimmed
-          : 'https://$trimmed',
-    );
-    if (parsed == null || parsed.host.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('সঠিক নিউজ লিংক দিন।')),
-      );
-      return;
-    }
-    await browser.loadUrl(parsed.toString());
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'লিংকটি নতুন ট্যাবে খোলা হয়েছে। Web নিরাপত্তার কারণে স্বয়ংক্রিয়ভাবে redirect ও article image পড়া যাচ্ছে না।',
-          ),
-          duration: Duration(seconds: 6),
-        ),
-      );
-    }
-    return;
-  }
   await _currentSubscription?.cancel();
   if (!context.mounted) return;
 
@@ -421,8 +396,10 @@ Future<void> resolveAndNavigate(
               await http.get(changedUri).timeout(const Duration(seconds: 30));
           if (response.statusCode < 200 || response.statusCode >= 400) {
             throw Exception(
-             'The article server returned ${response.statusCode}: $changedUri',
+              'The article server returned ${response.statusCode}: $changedUri',
             );
+          }
+
           final document = html_parser.parse(response.body);
           final title = document
                   .querySelector('meta[property="og:title"]')
@@ -903,9 +880,11 @@ class _NewsCardEditorState extends State<NewsCardEditor> {
     });
     _settingsWriteQueue = _settingsWriteQueue.then((_) async {
       try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('news_card_settings', settingsJson);
-      } catch (error) {
+        final directory = await getApplicationSupportDirectory();
+        final file = File(
+            '${directory.path}${Platform.pathSeparator}news_card_settings.json');
+        await file.writeAsString(settingsJson, flush: true);
+      } on FileSystemException catch (error) {
         debugPrint('Failed to save editor settings: $error');
       }
     });
@@ -913,10 +892,11 @@ class _NewsCardEditorState extends State<NewsCardEditor> {
 
   Future<void> _loadEditorSettings() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedSettings = prefs.getString('news_card_settings');
-      if (savedSettings != null) {
-        final decoded = jsonDecode(savedSettings);
+      final directory = await getApplicationSupportDirectory();
+      final file = File(
+          '${directory.path}${Platform.pathSeparator}news_card_settings.json');
+      if (await file.exists()) {
+        final decoded = jsonDecode(await file.readAsString());
         if (decoded is Map<String, dynamic>) {
           _textColor = _savedColor(decoded, 'textColor', _textColor);
           _selectedFontFamily =
@@ -969,8 +949,10 @@ class _NewsCardEditorState extends State<NewsCardEditor> {
           );
         }
       }
-    } catch (error) {
+    } on FileSystemException catch (error) {
       debugPrint('Failed to load editor settings: $error');
+    } on FormatException catch (error) {
+      debugPrint('Editor settings file is invalid: $error');
     } finally {
       _settingsLoaded = true;
       if (mounted) setState(() {});
@@ -1184,20 +1166,18 @@ Future<void> _exportImage() async {
       dialogTitle: 'কোথায় নিউজ কার্ডটি সেভ করতে চান?',
       fileName: 'news_card_${DateTime.now().millisecondsSinceEpoch}.jpg',
       type: FileType.image,
-      bytes: kIsWeb || defaultTargetPlatform == TargetPlatform.android
-          ? jpgBytes
-          : null,
+      bytes: Platform.isAndroid ? jpgBytes : null,
     );
 
     if (outputFile == null) return;
 
-    if (!kIsWeb && defaultTargetPlatform != TargetPlatform.android) {
+    if (!Platform.isAndroid) {
       var filePath = outputFile;
       if (!filePath.toLowerCase().endsWith('.jpg') &&
           !filePath.toLowerCase().endsWith('.jpeg')) {
         filePath += '.jpg';
       }
-      await writeBytesToPath(filePath, jpgBytes);
+      await File(filePath).writeAsBytes(jpgBytes, flush: true);
     }
 
     if (mounted) {
@@ -1974,26 +1954,39 @@ Future<void> _publishNow() async {
 
   Future<void> _pickBackgroundImage() async {
     try {
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.image,
-        withData: true,
-      );
+      final result = await FilePicker.platform.pickFiles(type: FileType.image);
       if (!mounted || result == null || result.files.isEmpty) return;
 
-      final imageBytes = result.files.single.bytes;
-      if (imageBytes == null || imageBytes.isEmpty) {
+      final path = result.files.single.path;
+      if (path == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("নির্বাচিত ছবিটি পড়া যায়নি।")),
+        );
+        return;
+      }
+      final file = File(path);
+      if (!await file.exists()) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("নির্বাচিত ছবিটি পড়া যায়নি।")),
         );
         return;
       }
 
-      setState(() => _displayImage = MemoryImage(imageBytes));
+      if (!mounted) return;
+      setState(() => _displayImage = FileImage(file));
     } on PlatformException catch (error) {
       debugPrint('Image picker failed: $error');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("ছবি নির্বাচন করা যায়নি।")),
+        );
+      }
+    } on FileSystemException catch (error) {
+      debugPrint('Selected image is unavailable: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("নির্বাচিত ছবিটি পড়া যায়নি।")),
         );
       }
     }
