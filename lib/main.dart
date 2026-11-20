@@ -3,7 +3,6 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:webfeed_revised/webfeed_revised.dart';
 import 'package:html/parser.dart' as html_parser;
-import 'access_gate.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:intl/intl.dart';
@@ -84,7 +83,7 @@ class NewsMakerApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const AccessGate(child: MainHomeScreen()),
+      home: const MainHomeScreen(),
     );
   }
 }
