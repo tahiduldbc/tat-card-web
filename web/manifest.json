@@ -1,0 +1,9 @@
+{
+  "name": "TAT News Card Solutions",
+  "short_name": "TAT Card",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#121212",
+  "theme_color": "#121212",
+  "description": "Bengali news card maker"
+}
