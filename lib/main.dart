@@ -420,12 +420,9 @@ Future<void> resolveAndNavigate(
           final response =
               await http.get(changedUri).timeout(const Duration(seconds: 30));
           if (response.statusCode < 200 || response.statusCode >= 400) {
-            throw HttpException(
-              'The article server returned ${response.statusCode}.',
-              uri: changedUri,
+            throw Exception(
+             'The article server returned ${response.statusCode}: $changedUri',
             );
-          }
-
           final document = html_parser.parse(response.body);
           final title = document
                   .querySelector('meta[property="og:title"]')
@@ -501,9 +498,8 @@ class _NewsListScreenState extends State<NewsListScreen> {
           .get(Uri.parse(widget.url))
           .timeout(const Duration(seconds: 30));
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(
-          'The RSS server returned ${response.statusCode}.',
-          uri: Uri.parse(widget.url),
+        throw Exception(
+          'The RSS server returned ${response.statusCode}: ${widget.url}',
         );
       }
       if (mounted) {
