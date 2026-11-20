@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
       - name: Build web
-        run: flutter build web --release --base-href "/tat-card_up/"
+        run: flutter build web --release --base-href "/tat-card-web/"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: build/web
